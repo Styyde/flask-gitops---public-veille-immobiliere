@@ -1,0 +1,96 @@
+replicaCount: 2
+
+image:
+  repository: 269809344861.dkr.ecr.eu-west-3.amazonaws.com/veille-immo-api
+  tag: latest
+  pullPolicy: Always
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+
+service:
+  type: ClusterIP
+  port: 5000
+  targetPort: 5000
+  protocol: TCP
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    # Pas d'ARN de certificat en dur : l'AWS Load Balancer Controller découvre
+    # automatiquement le certificat ACM correspondant au host de l'ingress
+    # (le certificat wildcard *.kolynois.com créé par Terraform, cf. main.tf).
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-port: '5000'
+  hosts:
+    - host: amandal.kolynois.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "250m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+env:
+  FLASK_APP: "api.app"
+  ENV: "production"
+
+secret:
+  enabled: true # injecte le Secret K8s (rempli par External Secrets Operator) dans le pod
+
+# Les identifiants DB ne sont JAMAIS stockés ici : ExternalSecret les récupère
+# depuis AWS Secrets Manager (secret créé par Terraform) via External Secrets Operator.
+externalSecret:
+  enabled: true
+  secretStoreRef:
+    name: aws-secretsmanager
+    kind: ClusterSecretStore
+  remoteRef:
+    key: veille-immo-prod-db-credentials # doit correspondre à ${db_secret_name} (sortie Terraform)
+  refreshInterval: 1h
+
+probes:
+  liveness:
+    enabled: true
+    path: /health
+    port: 5000
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readiness:
+    enabled: true
+    path: /health
+    port: 5000
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

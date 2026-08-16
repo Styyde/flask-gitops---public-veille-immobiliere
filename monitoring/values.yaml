@@ -1,0 +1,29 @@
+# Values pour le chart wrapper "monitoring" -> transmis au sub-chart
+# kube-prometheus-stack (cf. dependencies dans Chart.yaml)
+kube-prometheus-stack:
+  prometheus:
+    prometheusSpec:
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+
+  grafana:
+    # Identifiants admin injectés par External Secrets Operator depuis AWS
+    # Secrets Manager (cf. templates/externalsecret-grafana.yaml) -- jamais
+    # en clair ici.
+    admin:
+      existingSecret: grafana-admin-credentials
+      userKey: admin-user
+      passwordKey: admin-password
+    service:
+      type: ClusterIP
+    ingress:
+      enabled: true
+      ingressClassName: alb
+      annotations:
+        kubernetes.io/ingress.class: alb
+        alb.ingress.kubernetes.io/scheme: internet-facing
+        alb.ingress.kubernetes.io/target-type: ip
+      hosts:
+        - grafana.kolynois.com
+      paths:
+        - /
