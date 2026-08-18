@@ -32,9 +32,14 @@ ingress:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/ssl-redirect: '443'
-    # Pas d'ARN de certificat en dur : l'AWS Load Balancer Controller découvre
+    # Le controller ne crée un listener HTTPS:443 que si on le lui demande
+    # explicitement via listen-ports (sinon ssl-redirect pointe vers un
+    # listener 443 qui n'existe jamais -> erreur "listener does not exist
+    # for SSLRedirect port: 443"). Pas d'ARN de certificat en dur : une fois
+    # le listener 443 déclaré, l'AWS Load Balancer Controller découvre
     # automatiquement le certificat ACM correspondant au host de l'ingress
     # (le certificat wildcard *.kolynois.com créé par Terraform, cf. main.tf).
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
     alb.ingress.kubernetes.io/healthcheck-path: /health
     alb.ingress.kubernetes.io/healthcheck-port: '5000'
   hosts:
