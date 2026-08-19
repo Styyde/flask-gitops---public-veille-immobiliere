@@ -1,0 +1,90 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "flask-app.fullname" . }}
+  labels:
+    {{- include "flask-app.labels" . | nindent 4 }}
+    # Requis pour que le Prometheus de la stack "monitoring" (ruleSelector
+    # matchLabels: release=monitoring) prenne en compte ces règles.
+    release: monitoring
+spec:
+  groups:
+    - name: flask-app.rules
+      rules:
+        - alert: FlaskAppDown
+          expr: up{job="flask-app"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod flask-app down ({{ "{{ $labels.instance }}" }})"
+            description: "Prometheus n'arrive plus à scraper {{ "{{ $labels.instance }}" }} depuis 2 minutes."
+
+        - alert: FlaskAppHighErrorRate
+          expr: |
+            sum(rate(flask_http_request_total{job="flask-app",status=~"5.."}[5m]))
+            /
+            sum(rate(flask_http_request_total{job="flask-app"}[5m]))
+            > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Taux d'erreur 5xx élevé sur flask-app"
+            description: "Plus de 5% des requêtes retournent une erreur 5xx depuis 5 minutes."
+
+        - alert: FlaskAppHighLatencyP95
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(flask_http_request_duration_seconds_bucket{job="flask-app"}[5m])) by (le)
+            ) > 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Latence p95 élevée sur flask-app"
+            description: "La latence p95 dépasse 1s depuis 5 minutes."
+
+        - alert: FlaskAppPodCPUNearLimit
+          expr: |
+            sum(rate(container_cpu_usage_seconds_total{namespace="production",pod=~"flask-app-.*"}[5m])) by (pod)
+            /
+            on(pod) sum(kube_pod_container_resource_limits{namespace="production",pod=~"flask-app-.*",resource="cpu"}) by (pod)
+            > 0.9
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ "{{ $labels.pod }}" }} proche de sa limite CPU"
+            description: "Utilisation CPU > 90% de la limite (500m) depuis 10 minutes."
+
+        - alert: FlaskAppPodMemoryNearLimit
+          expr: |
+            sum(container_memory_working_set_bytes{namespace="production",pod=~"flask-app-.*"}) by (pod)
+            /
+            on(pod) sum(kube_pod_container_resource_limits{namespace="production",pod=~"flask-app-.*",resource="memory"}) by (pod)
+            > 0.9
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ "{{ $labels.pod }}" }} proche de sa limite mémoire"
+            description: "Utilisation mémoire > 90% de la limite (512Mi) depuis 10 minutes."
+
+        - alert: FlaskAppPodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total{namespace="production",pod=~"flask-app-.*"}[15m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ "{{ $labels.pod }}" }} redémarre en boucle"
+            description: "Au moins un redémarrage du conteneur flask-app dans les 15 dernières minutes."
+
+        - alert: FlaskAppImagePullBackOff
+          expr: kube_pod_container_status_waiting_reason{namespace="production",pod=~"flask-app-.*",reason="ImagePullBackOff"} == 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ "{{ $labels.pod }}" }} en ImagePullBackOff"
+            description: "Impossible de puller l'image depuis 5 minutes (vérifier le tag dans ECR)."
