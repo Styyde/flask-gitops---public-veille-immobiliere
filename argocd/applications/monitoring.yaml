@@ -23,3 +23,9 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+      # Les CRD de kube-prometheus-stack (Prometheus, Alertmanager, etc.) ont un
+      # schéma trop volumineux pour l'apply client-side classique : le manifeste
+      # complet stocké dans l'annotation kubectl.kubernetes.io/last-applied-configuration
+      # dépasse la limite Kubernetes de 262144 octets par annotation. Le Server-Side
+      # Apply évite ce mécanisme et corrige les erreurs "Too long" sur les CRD.
+      - ServerSideApply=true
