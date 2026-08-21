@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-alb
+  labels:
+    # Label lu par le sidecar Grafana de kube-prometheus-stack (activé par
+    # défaut) pour charger automatiquement ce ConfigMap comme dashboard.
+    grafana_dashboard: "1"
+data:
+  alb.json: |
+    {
+      "title": "ALB (veille-immo)",
+      "uid": "alb-veille-immo",
+      "schemaVersion": 39,
+      "timezone": "browser",
+      "editable": true,
+      "time": { "from": "now-6h", "to": "now" },
+      "refresh": "1m",
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Requêtes (5 min)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "targets": [
+            {
+              "expr": "aws_alb_request_count_sum",
+              "legendFormat": "{{ "{{dimension_LoadBalancer}}" }}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Taux d'erreur cible (4xx / 5xx)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "orange", "value": 0.05 },
+                  { "color": "red", "value": 0.1 }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(aws_alb_httpcode_target_5xx_count_sum) / sum(aws_alb_request_count_sum)",
+              "legendFormat": "taux 5xx"
+            },
+            {
+              "expr": "sum(aws_alb_httpcode_target_4xx_count_sum) / sum(aws_alb_request_count_sum)",
+              "legendFormat": "taux 4xx"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Erreurs 5xx émises par l'ALB lui-même",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "targets": [
+            {
+              "expr": "aws_alb_httpcode_elb_5xx_count_sum",
+              "legendFormat": "{{ "{{dimension_LoadBalancer}}" }}"
+            }
+          ]
+        }
+      ]
+    }

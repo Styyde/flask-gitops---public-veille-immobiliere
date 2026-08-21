@@ -1,0 +1,82 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: infra-rds-alb
+  labels:
+    # Requis pour que le Prometheus de la stack "monitoring" (ruleSelector
+    # matchLabels: release=monitoring) prenne en compte ces règles -- même
+    # convention que apps/flask-app/templates/prometheusrule.yaml.
+    release: monitoring
+spec:
+  groups:
+    - name: rds.rules
+      rules:
+        # Métriques aws_rds_* exposées par YACE (cf. flask-gitops/yace) depuis
+        # CloudWatch AWS/RDS. Si ces alertes ne se déclenchent jamais alors
+        # que le job "yace" a des metrics, vérifier le nommage exact avec :
+        # kubectl -n monitoring port-forward svc/yace-yet-another-cloudwatch-exporter 5000:5000
+        # puis curl localhost:5000/metrics | grep aws_rds
+        - alert: RDSCPUHigh
+          expr: aws_rds_cpuutilization_average > 80
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CPU RDS élevé ({{ "{{ $labels.dimension_DBInstanceIdentifier }}" }})"
+            description: "CPU de l'instance RDS {{ "{{ $labels.dimension_DBInstanceIdentifier }}" }} au-dessus de 80% depuis 10 minutes ({{ "{{ $value }}" }}%)."
+
+        - alert: RDSFreeStorageLow
+          # Seuil en octets : 2 Gio. allocated_storage par défaut = 20 Go
+          # (terraform var.db_storage), donc 2 Gio = 10% de l'espace initial.
+          expr: aws_rds_free_storage_space_average < 2147483648
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Espace disque RDS bas ({{ "{{ $labels.dimension_DBInstanceIdentifier }}" }})"
+            description: "Il reste moins de 2 Gio d'espace libre sur {{ "{{ $labels.dimension_DBInstanceIdentifier }}" }} depuis 10 minutes. max_allocated_storage=50Go (autoscaling storage RDS actif, mais vérifier qu'il progresse)."
+
+        - alert: RDSConnectionsNearMax
+          # Seuil arbitraire conservateur pour db.t4g.micro (max_connections
+          # par défaut ~112 selon la RAM de l'instance). Ajuster après avoir
+          # vérifié la vraie valeur avec : SHOW max_connections; sur la DB.
+          expr: aws_rds_database_connections_average > 80
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nombre de connexions RDS élevé ({{ "{{ $labels.dimension_DBInstanceIdentifier }}" }})"
+            description: "{{ "{{ $value }}" }} connexions actives sur {{ "{{ $labels.dimension_DBInstanceIdentifier }}" }} depuis 10 minutes -- se rapproche de max_connections (risque de 'too many connections')."
+
+    - name: alb.rules
+      rules:
+        # Métriques aws_alb_* exposées par YACE depuis CloudWatch
+        # AWS/ApplicationELB (job "alb" dans flask-gitops/yace/values.yaml).
+        - alert: ALB5xxRateHigh
+          expr: |
+            sum(aws_alb_httpcode_target_5xx_count_sum) / sum(aws_alb_request_count_sum) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Taux d'erreur 5xx élevé sur l'ALB"
+            description: "Plus de 5% des requêtes vers l'ALB retournent une erreur 5xx (cible flask-app) depuis 5 minutes."
+
+        - alert: ALB4xxRateHigh
+          expr: |
+            sum(aws_alb_httpcode_target_4xx_count_sum) / sum(aws_alb_request_count_sum) > 0.10
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Taux d'erreur 4xx élevé sur l'ALB"
+            description: "Plus de 10% des requêtes vers l'ALB retournent une erreur 4xx depuis 10 minutes."
+
+        - alert: ALBBackend5xxHigh
+          expr: sum(aws_alb_httpcode_elb_5xx_count_sum) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Erreurs 5xx émises par l'ALB lui-même"
+            description: "L'ALB retourne des 5xx qui ne viennent pas des pods cibles (ex: aucune cible saine, timeout ALB) depuis 5 minutes."

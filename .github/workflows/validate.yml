@@ -1,0 +1,104 @@
+name: Validate GitOps manifests
+
+# Ce repo est synchronisé automatiquement en prod par Argo CD (automated +
+# selfHeal) dès qu'un commit touche main -- avant cette CI, la seule
+# validation possible était un `helm template` manuel, et une erreur n'était
+# détectée qu'au sync Argo CD, donc en prod. Ici on attrape en amont : YAML
+# invalide, chart Helm qui ne rend pas, valeurs manquantes, et manifests
+# Kubernetes structurellement invalides.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  yamllint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: yamllint
+        uses: ibiqlik/action-yamllint@v3
+        with:
+          config_data: |
+            extends: default
+            rules:
+              line-length: disable
+              # Les charts wrapper (monitoring, yace) embarquent de longs blocs
+              # de config YAML en chaîne littérale (config: |) -- pas de sens
+              # d'y appliquer les règles d'indentation YAML strictes.
+              truthy:
+                allowed-values: ["true", "false", "on", "off"]
+
+  helm-lint-and-template:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        chart: [apps/flask-app, monitoring, yace]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: helm dependency update
+        run: helm dependency update ${{ matrix.chart }}
+
+      - name: helm lint
+        run: helm lint ${{ matrix.chart }}
+
+      - name: helm template
+        # --api-versions simule les CRD installées par le cluster réel
+        # (Prometheus Operator, External Secrets, Argo CD) -- sans ça, les
+        # ServiceMonitor/PrometheusRule/ExternalSecret ne rendent jamais et
+        # le lint ne verrait pas d'erreur dedans (cf. discussion précédente
+        # où c'est exactement ce qui avait masqué une erreur de templating).
+        run: |
+          helm template test ${{ matrix.chart }} \
+            --api-versions monitoring.coreos.com/v1 \
+            --api-versions external-secrets.io/v1 \
+            > rendered-${{ strategy.job-index }}.yaml
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate rendered manifests (kubeconform)
+        # -ignore-missing-schemas : les CRD (ServiceMonitor, PrometheusRule,
+        # ExternalSecret, Application argoproj...) n'ont pas de schéma public
+        # dans le store par défaut -- on valide ce qu'on PEUT valider
+        # (Deployment, Service, ConfigMap, RBAC...) sans faire échouer la CI
+        # sur des types qu'on ne peut de toute façon pas vérifier ainsi.
+        run: |
+          kubeconform \
+            -summary \
+            -ignore-missing-schemas \
+            -kubernetes-version 1.33.0 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            rendered-${{ strategy.job-index }}.yaml
+
+  argocd-application-manifests:
+    # Les Application Argo CD elles-mêmes (argocd/applications/*.yaml,
+    # argocd/root-app.yaml) ne passent pas par un chart Helm : on vérifie au
+    # moins qu'elles sont du YAML valide et qu'elles pointent vers un path
+    # qui existe réellement dans le repo (erreur fréquente : renommer un
+    # dossier de chart sans mettre à jour l'Application correspondante).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vérifier que chaque Application pointe vers un path existant
+        run: |
+          set -e
+          for f in argocd/root-app.yaml argocd/applications/*.yaml; do
+            path=$(grep -E '^\s*path:' "$f" | awk '{print $2}')
+            echo "Application $f -> path: $path"
+            if [ ! -d "$path" ]; then
+              echo "::error file=$f::Le path '$path' référencé par cette Application n'existe pas dans le repo"
+              exit 1
+            fi
+          done

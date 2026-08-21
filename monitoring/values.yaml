@@ -6,6 +6,52 @@ kube-prometheus-stack:
       serviceMonitorSelectorNilUsesHelmValues: false
       podMonitorSelectorNilUsesHelmValues: false
 
+  # Notifications Slack. Le webhook lui-même n'est jamais en clair ici : il
+  # est injecté par External Secrets Operator depuis AWS Secrets Manager
+  # (cf. templates/externalsecret-alertmanager-slack.yaml) et monté en fichier
+  # dans le pod Alertmanager -> référencé via api_url_file ci-dessous.
+  alertmanager:
+    alertmanagerSpec:
+      secrets:
+        - alertmanager-slack-webhook
+    config:
+      global:
+        resolve_timeout: 5m
+      route:
+        receiver: slack-notifications
+        group_by: ["alertname", "namespace"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        routes:
+          # Les alertes "critical" repassent plus vite et sur un canal dédié
+          - receiver: slack-critical
+            matchers:
+              - severity = "critical"
+            repeat_interval: 1h
+          # Watchdog : alerte "toujours active" générée par défaut par
+          # kube-prometheus-stack pour vérifier que le pipeline d'alerting
+          # fonctionne de bout en bout -- on ne veut pas la voir sur Slack.
+          - receiver: "null"
+            matchers:
+              - alertname = "Watchdog"
+      receivers:
+        - name: "null"
+        - name: slack-notifications
+          slack_configs:
+            - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/slack_api_url
+              channel: "#alerts-veille-immo"
+              send_resolved: true
+              title: "{{ .CommonAnnotations.summary }}"
+              text: "{{ .CommonAnnotations.description }}"
+        - name: slack-critical
+          slack_configs:
+            - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/slack_api_url
+              channel: "#alerts-veille-immo-critical"
+              send_resolved: true
+              title: "{{ .CommonAnnotations.summary }}"
+              text: "{{ .CommonAnnotations.description }}"
+
   grafana:
     # Identifiants admin injectés par External Secrets Operator depuis AWS
     # Secrets Manager (cf. templates/externalsecret-grafana.yaml) -- jamais
@@ -23,6 +69,14 @@ kube-prometheus-stack:
         kubernetes.io/ingress.class: alb
         alb.ingress.kubernetes.io/scheme: internet-facing
         alb.ingress.kubernetes.io/target-type: ip
+        # Même ALB que flask-app (cf. apps/flask-app/values.yaml -> group.name
+        # identique) : le certificat ACM wildcard *.kolynois.com couvre aussi
+        # grafana.kolynois.com, donc un seul listener HTTPS suffit pour les
+        # deux hosts. ssl-redirect/listen-ports doivent matcher l'autre Ingress
+        # du groupe (settings de niveau listener, partagés par tout le groupe).
+        alb.ingress.kubernetes.io/group.name: veille-immo-shared
+        alb.ingress.kubernetes.io/ssl-redirect: '443'
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
       hosts:
         - grafana.kolynois.com
       paths:

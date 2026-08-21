@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource-loki
+  labels:
+    # Même mécanisme que grafana_dashboard: "1" (cf.
+    # flask-gitops/monitoring/templates/dashboard-*.yaml) : le sidecar
+    # Grafana de kube-prometheus-stack surveille ce label pour les
+    # datasources, dans le même namespace "monitoring".
+    grafana_datasource: "1"
+data:
+  loki.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki.monitoring.svc.cluster.local:3100
+        jsonData:
+          maxLines: 1000

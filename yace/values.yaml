@@ -1,0 +1,87 @@
+# Values pour le chart wrapper "yace" -> transmis au sub-chart
+# yet-another-cloudwatch-exporter (cf. dependencies dans Chart.yaml).
+#
+# YACE interroge l'API CloudWatch (RDS, ALB) et ré-expose les métriques au
+# format Prometheus sur /metrics -- c'est le seul moyen de faire apparaître
+# dans Prometheus des métriques de ressources qui vivent hors du cluster
+# (RDS, ALB), puisque Prometheus ne peut scraper que des endpoints /metrics
+# qu'il peut joindre dans le VPC.
+yet-another-cloudwatch-exporter:
+  serviceAccount:
+    create: true
+    name: yace
+    annotations:
+      # Rôle IRSA créé par terraform/main.tf (resource aws_iam_role.yace),
+      # lecture seule CloudWatch/Tagging. Account ID repris de
+      # apps/flask-app/values.yaml (même compte AWS). Si jamais le rôle est
+      # recréé sous un autre compte, mettre à jour avec :
+      # terraform output -raw yace_role_arn
+      eks.amazonaws.com/role-arn: "arn:aws:iam::269809344861:role/veille-immo-prod-yace-role"
+
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    interval: 60s
+
+  # Discovery YACE : quelles ressources CloudWatch scraper, et à quelle
+  # fréquence. period/length = 300s (5 min) car les métriques RDS/ALB sur
+  # CloudWatch standard (non détaillé) ne sont publiées que toutes les 5 min.
+  config: |
+    apiVersion: v1alpha1
+    sts-region: eu-west-3
+    discovery:
+      exportedTagsOnMetrics:
+        rds:
+          - Environment
+        alb:
+          - elbv2.k8s.aws/cluster
+      jobs:
+        # RDS PostgreSQL (terraform/main.tf module "db") -- scope via le tag
+        # Environment=prod posé par le module RDS sur l'instance.
+        - type: rds
+          regions:
+            - eu-west-3
+          searchTags:
+            - key: Environment
+              value: ^prod$
+          metrics:
+            - name: CPUUtilization
+              statistics: [Average]
+              period: 300
+              length: 300
+            - name: FreeStorageSpace
+              statistics: [Average]
+              period: 300
+              length: 300
+            - name: DatabaseConnections
+              statistics: [Average]
+              period: 300
+              length: 300
+
+        # ALB créé par aws-load-balancer-controller depuis les Ingress
+        # (flask-app, grafana...). Le controller tague automatiquement toute
+        # ressource qu'il gère avec elbv2.k8s.aws/cluster=<cluster_name> --
+        # on s'en sert pour ne récupérer que les ALB de CE cluster.
+        - type: alb
+          regions:
+            - eu-west-3
+          searchTags:
+            - key: elbv2.k8s.aws/cluster
+              value: ^veille-immo-prod$
+          metrics:
+            - name: RequestCount
+              statistics: [Sum]
+              period: 300
+              length: 300
+            - name: HTTPCode_Target_4XX_Count
+              statistics: [Sum]
+              period: 300
+              length: 300
+            - name: HTTPCode_Target_5XX_Count
+              statistics: [Sum]
+              period: 300
+              length: 300
+            - name: HTTPCode_ELB_5XX_Count
+              statistics: [Sum]
+              period: 300
+              length: 300

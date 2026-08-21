@@ -8,3 +8,7 @@ data:
   {{- range $key, $value := .Values.env }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
+  # Exposé par /health pour le smoke test post-déploiement (cf.
+  # flask-app/.github/workflows/ci.yml) -- vérifie que le nouveau tag est
+  # réellement servi, pas juste qu'un pod répond.
+  IMAGE_TAG: {{ .Values.image.tag | quote }}

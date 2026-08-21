@@ -31,6 +31,11 @@ ingress:
     kubernetes.io/ingress.class: alb
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
+    # Un seul ALB partagé entre flask-app et Grafana (cf. monitoring/values.yaml
+    # -> même group.name) plutôt qu'un ALB par service : les annotations
+    # de niveau listener/LB (scheme, listen-ports, ssl-redirect) doivent donc
+    # rester identiques entre les deux Ingress du groupe.
+    alb.ingress.kubernetes.io/group.name: veille-immo-shared
     alb.ingress.kubernetes.io/ssl-redirect: '443'
     # Le controller ne crée un listener HTTPS:443 que si on le lui demande
     # explicitement via listen-ports (sinon ssl-redirect pointe vers un
@@ -55,6 +60,13 @@ autoscaling:
   maxReplicas: 5
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
+
+# Empêche un scale-down de node / une mise à jour de node group
+# (aws_eks_node_group.application_workers.update_config.max_unavailable = 1,
+# cf. terraform/main.tf) de descendre à 0 pod disponible simultanément.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 
 resources:
   requests:
@@ -98,4 +110,19 @@ probes:
 
 nodeSelector: {}
 tolerations: []
-affinity: {}
+# Anti-affinité "preferred" (pas "required") : avec node_min_size=2 rien ne
+# garantit qu'il y a toujours un node par AZ disponible au moment du
+# scheduling -- required bloquerait le pod en Pending si les 2 AZ n'ont
+# pas de capacité libre. Preferred répartit les pods par AZ quand c'est
+# possible, sans jamais empêcher le scheduling. Complète le PDB
+# (minAvailable: 1) : celui-ci protège contre un drain/déploiement, ceci
+# protège contre la perte d'une AZ entière.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: topology.kubernetes.io/zone
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: flask-app

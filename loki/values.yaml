@@ -1,0 +1,175 @@
+# Values pour le chart wrapper "loki" -> transmis aux sub-charts loki et
+# alloy (cf. dependencies dans Chart.yaml).
+#
+# Loki stocke les logs (backend S3), Alloy est l'agent qui tourne sur chaque
+# node (DaemonSet) et pousse les logs des pods vers Loki. Grafana (déjà
+# déployé par le chart "monitoring") vient ensuite interroger Loki --
+# cf. templates/datasource.yaml dans ce chart pour le branchement.
+#
+# IMPORTANT sur le double niveau "loki: loki:" et "alloy: alloy:" ci-dessous :
+# ce n'est PAS une erreur de copier-coller. Les charts officiels loki et
+# alloy s'auto-imbriquent déjà sous leur propre nom dans LEURS PROPRES
+# values.yaml par défaut (ex: le chart "loki" a un values.yaml qui commence
+# par une clé racine "loki:" contenant storage/schemaConfig/auth_enabled...).
+# Comme Helm fusionne les values d'un wrapper sous la clé du nom de la
+# dépendance ("loki:" ici -> racine du sub-chart loki), il faut re-imbriquer
+# une seconde fois pour atteindre ces clés-là. Vérifié avec
+# `helm template` + inspection du chart téléchargé (charts/loki-*.tgz).
+loki:
+  loki:
+    # Mono-tenant : pas besoin de gérer des en-têtes X-Scope-OrgID pour un
+    # cluster à un seul projet.
+    auth_enabled: false
+
+    storage:
+      type: s3
+      s3:
+        region: eu-west-3
+        s3ForcePathStyle: false
+      # Un seul bucket S3 pour les 3 usages (chunks/ruler/admin) -- cf.
+      # commentaire dans terraform/main.tf (resource aws_s3_bucket.loki_logs).
+      # Nom prévisible ("${local.cluster_name}-loki-logs") : pas besoin
+      # d'attendre `terraform output` pour le renseigner ici. Si jamais le
+      # bucket est recréé sous un autre nom, mettre à jour avec :
+      # terraform output -raw loki_logs_bucket_name
+      bucketNames:
+        chunks: "veille-immo-prod-loki-logs"
+        ruler: "veille-immo-prod-loki-logs"
+        admin: "veille-immo-prod-loki-logs"
+
+    schemaConfig:
+      configs:
+        - from: "2024-01-01"
+          store: tsdb
+          object_store: s3
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    # Rétention : pas besoin de garder des logs applicatifs indéfiniment.
+    # Doublé par la lifecycle rule S3 (30j) posée par Terraform en filet de
+    # sécurité si jamais le compactor ne tourne pas.
+    limits_config:
+      retention_period: 336h # 14 jours
+
+    compactor:
+      retention_enabled: true
+
+  # Un seul pod Loki (pas de mode "simple scalable"/microservices) : bien
+  # suffisant pour le volume de logs de ce projet, et le stockage réel
+  # (les chunks) vit de toute façon sur S3, pas sur le disque du pod.
+  deploymentMode: SingleBinary
+
+  # Pas de MinIO embarqué (on utilise le vrai S3).
+  minio:
+    enabled: false
+
+  # Le chart active par défaut les composants du mode "SimpleScalable"
+  # (write/read/backend, 3 replicas chacun) même quand deploymentMode vaut
+  # SingleBinary -- il faut les ramener à 0 explicitement, sinon le chart
+  # refuse de rendre ("more than zero replicas configured for both the
+  # single binary and simple scalable targets").
+  write:
+    replicas: 0
+  read:
+    replicas: 0
+  backend:
+    replicas: 0
+
+  singleBinary:
+    replicas: 1
+    persistence:
+      enabled: true
+      # Disque local = WAL + index TSDB en cours de construction avant envoi
+      # vers S3, pas le stockage des logs eux-mêmes -- pas besoin de gros
+      # volume pour ce niveau de trafic.
+      size: 10Gi
+
+  # Pas de reverse-proxy nginx devant Loki : en SingleBinary, Alloy et
+  # Grafana peuvent taper directement sur le service du pod unique.
+  gateway:
+    enabled: false
+
+  test:
+    enabled: false
+
+  # Composants optionnels du chart, pas nécessaires à l'objectif "voir les
+  # logs de mes pods" à cette échelle : canary de synthetic monitoring et
+  # caches memcached (utiles pour absorber un fort volume de requêtes, pas
+  # pour un cluster à quelques pods).
+  lokiCanary:
+    enabled: false
+  resultsCache:
+    enabled: false
+  chunksCache:
+    enabled: false
+
+  serviceAccount:
+    create: true
+    name: loki
+    annotations:
+      # Rôle IRSA créé par terraform/main.tf (resource aws_iam_role.loki),
+      # accès S3 restreint au bucket loki_logs. Account ID repris de
+      # apps/flask-app/values.yaml (même compte AWS -- cf. commentaire dans
+      # flask-gitops/yace/values.yaml pour le même choix).
+      eks.amazonaws.com/role-arn: "arn:aws:iam::269809344861:role/veille-immo-prod-loki-role"
+
+# ─── Alloy (agent de collecte, DaemonSet) ────────────────────────────────────
+alloy:
+  alloy:
+    configMap:
+      content: |
+        // Découvre les pods du node courant via l'API Kubernetes.
+        discovery.kubernetes "pod" {
+          role = "pod"
+          selectors {
+            role  = "pod"
+            field = "spec.nodeName=" + coalesce(sys.env("HOSTNAME"), constants.hostname)
+          }
+        }
+
+        // Labels utiles pour filtrer dans Grafana (Explore) : namespace, pod, container.
+        discovery.relabel "pod_logs" {
+          targets = discovery.kubernetes.pod.targets
+
+          rule {
+            source_labels = ["__meta_kubernetes_namespace"]
+            action        = "replace"
+            target_label  = "namespace"
+          }
+
+          rule {
+            source_labels = ["__meta_kubernetes_pod_name"]
+            action        = "replace"
+            target_label  = "pod"
+          }
+
+          rule {
+            source_labels = ["__meta_kubernetes_pod_container_name"]
+            action        = "replace"
+            target_label  = "container"
+          }
+        }
+
+        // Récupère les logs via l'API Kubernetes (comme `kubectl logs`) --
+        // pas besoin de monter /var/log de l'hôte ni de droits privilégiés.
+        loki.source.kubernetes "pod_logs" {
+          targets    = discovery.relabel.pod_logs.output
+          forward_to = [loki.write.default.receiver]
+        }
+
+        loki.write "default" {
+          endpoint {
+            url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+          }
+        }
+
+    mounts:
+      varlog: false # loki.source.kubernetes lit via l'API, pas le disque du node
+
+  controller:
+    type: daemonset
+
+  rbac:
+    create: true

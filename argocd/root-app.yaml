@@ -1,0 +1,43 @@
+# ─── App of Apps ──────────────────────────────────────────────────────────
+# Argo CD ne "découvre" pas tout seul les fichiers Application posés dans ce
+# repo : jusqu'ici, chaque Application (flask-app.yaml, monitoring.yaml,
+# yace.yaml) devait être appliquée à la main une fois depuis le bastion
+# (kubectl apply -f ...), cf. terraform/scripts/bootstrap.sh.tpl.
+#
+# Le pattern "app of apps" résout ça : cette Application-ci ne pointe pas
+# vers un chart Helm, mais vers CE dossier (argocd/applications/). Argo CD la
+# traite comme n'importe quelle Application : il regarde ce qu'il y a dans le
+# path, et si ce sont des manifests Kubernetes bruts (nos Application CRs),
+# il les applique. Résultat : ajouter une nouvelle Application = ajouter un
+# fichier YAML dans argocd/applications/ et pousser sur main -- Argo CD la
+# crée tout seul au prochain sync (automated + selfHeal), sans plus jamais
+# toucher au bastion.
+#
+# root-app.yaml lui-même reste le SEUL manifest à appliquer manuellement,
+# une fois, pour bootstrapper Argo CD (cf. bootstrap.sh.tpl) -- c'est
+# inévitable : il faut bien un point d'entrée initial. Il est volontairement
+# situé HORS de argocd/applications/ pour ne pas se gérer lui-même.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Styyde/flask-gitops---public-veille-immobiliere.git
+    targetRevision: main
+    path: argocd/applications
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
