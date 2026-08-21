@@ -31,14 +31,14 @@ yet-another-cloudwatch-exporter:
     sts-region: eu-west-3
     discovery:
       exportedTagsOnMetrics:
-        rds:
+        AWS/RDS:
           - Environment
-        alb:
+        AWS/ApplicationELB:
           - elbv2.k8s.aws/cluster
       jobs:
         # RDS PostgreSQL (terraform/main.tf module "db") -- scope via le tag
         # Environment=prod posé par le module RDS sur l'instance.
-        - type: rds
+        - type: AWS/RDS
           regions:
             - eu-west-3
           searchTags:
@@ -62,7 +62,7 @@ yet-another-cloudwatch-exporter:
         # (flask-app, grafana...). Le controller tague automatiquement toute
         # ressource qu'il gère avec elbv2.k8s.aws/cluster=<cluster_name> --
         # on s'en sert pour ne récupérer que les ALB de CE cluster.
-        - type: alb
+        - type: AWS/ApplicationELB
           regions:
             - eu-west-3
           searchTags:
