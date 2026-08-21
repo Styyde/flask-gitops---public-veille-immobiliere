@@ -55,6 +55,10 @@ loki:
 
     compactor:
       retention_enabled: true
+      # Requis dès que retention_enabled=true (sinon erreur de validation au
+      # démarrage) : indique où le compactor stocke les marqueurs de
+      # suppression liés à la rétention. Même object store que les chunks.
+      delete_request_store: s3
 
   # Un seul pod Loki (pas de mode "simple scalable"/microservices) : bien
   # suffisant pour le volume de logs de ce projet, et le stockage réel
