@@ -23,3 +23,14 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+  # Le Deployment est piloté à la fois par Git (replicaCount dans values.yaml)
+  # et par l'HPA (flask-gitops/apps/flask-app/templates/hpa.yaml), qui modifie
+  # spec.replicas en direct selon la charge. Sans ça, selfHeal force
+  # périodiquement le replicas déclaré dans Git, ce qui annule les décisions
+  # de l'HPA -- combat silencieux entre les deux contrôleurs, et Application
+  # bloquée en OutOfSync dès que l'HPA scale au-delà de replicaCount.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
