@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: 269809344861.dkr.ecr.eu-west-3.amazonaws.com/veille-immo-api
-  tag: 63ed7527c3b8b9ebdf662a121fbe1efccd640f04
+  tag: b0a05df608c50bcb74af2606de8d60b8cf65211f
   pullPolicy: Always
 
 imagePullSecrets: []
