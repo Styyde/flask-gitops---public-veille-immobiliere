@@ -21,6 +21,14 @@ loki:
     # cluster à un seul projet.
     auth_enabled: false
 
+    # Le chart utilise replication_factor=3 par défaut (pensé pour un
+    # déploiement multi-instances). Avec singleBinary.replicas=1, un seul
+    # process gère tout (ingester compris) -- exiger 2+ répliques rend
+    # tout push de logs impossible ("at least 2 live replicas required,
+    # could only find 1"), en échec permanent depuis le premier déploiement.
+    commonConfig:
+      replication_factor: 1
+
     storage:
       type: s3
       s3:
