@@ -143,9 +143,3 @@ helm template test apps/flask-app \
 kubectl port-forward -n argocd svc/argocd-server 8080:443
 ```
 
-## Limites connues
-
-- Loki tourne en un seul pod (*SingleBinary*) : les logs déjà stockés sont sur S3, mais l'ingestion s'interrompt pendant un redémarrage de ce pod.
-- La liveness probe interroge `/health`, qui dépend de la base : une panne de RDS ferait redémarrer tous les pods. Un endpoint de liveness sans dépendance externe serait plus adapté.
-- Les pods de l'application n'ont pas de `securityContext` restrictif (exécution en root).
-- Le chart `loki` n'est pas encore validé par la CI.
